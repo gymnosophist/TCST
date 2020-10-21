@@ -7,6 +7,8 @@ output: pdf_document
 ---
 # Introduction and Setup
 
+This notebook covers the extraction of available IPEDS data with the aim of producing a Shiny app where users can explore the [college stress test](https://jhupbooks.press.jhu.edu/title/college-stress-test) as described by Zemsky et al. 
+
 We'll use the IPEDS package from Jason Bryer to access the data. Note that users can download the IPEDS data for a given year (in .accdb format) [here](https://nces.ed.gov/ipeds/use-the-data/download-access-database)
 
 ```{r setup, include=FALSE}
@@ -21,6 +23,7 @@ library(knitr)
 library(ipeds)
 library(tidyverse)
 library(hrbrthemes)
+library(stringr)
 # set download directory if desired
 getOption('ipeds.download.dir')
 ```
@@ -108,6 +111,8 @@ We then fit a linear regression line to the data, and project the line forward i
 
 If that doesn't make sense, it should when we're through this first example. 
 
+# 1. Enrollment data
+
 # Getting first-year enrollment
 
 The `ipeds_survey` function will load a specific data table for the given year. 
@@ -183,11 +188,8 @@ extract_enrollment <- function(year){
     survey <-  survey %>% 
         select(c(UNITID, EFUG1ST)) %>% 
         mutate(year = year)
-    
     }
-```
 
-```{r iterate over years of survey data to extract enrollment figures and IDs}
 
 data_list = list()
 
@@ -262,7 +264,7 @@ We can use the `HD` survey to identify those classes.
 ```{r generate panel data with descriptive characteristics}
 
 enrollment_panel <- 
-    hd %>% select(c(UNITID, INSTNM, ICLEVEL, CONTROL)) %>% right_join(enrollment_df, by = 'UNITID')
+    ipeds.hd %>% select(c(UNITID, INSTNM, ICLEVEL, CONTROL)) %>% right_join(enrollment_df, by = 'UNITID')
 
 ### Now we split-apply-combine to generate our distributions.  
 
@@ -321,19 +323,21 @@ enrollment_change.public_fy %>%
     theme(plot.title = element_text(hjust = .7))
 ```
 
+# Retention Rates
+
 Now we can look at our second indicator, freshman retention rate. 
 
 We find this in the `RET_PCF` again in the `EF` (fall enrollment) table. 
 
 ```{r get freshman retention rate}
-extact_retention <- function(year){
+extract_retention <- function(year){
     #' extract retention data from IPEDS surveys in a given year 
     ipeds <- load_ipeds(year)
-    survey_string <- paste0("EF", year - 1)
+    survey_string <- paste0("EF", year - 1, "D")
     print(survey_string)
     survey <- ipeds::ipeds_survey(survey_string, year = year)
     survey <-  survey %>% 
-        select(c(UNITID, RET_PCF)) %>% 
+        select(c(UNITID, RET.PCF)) %>% 
         mutate(year = year)
 }
 
@@ -341,13 +345,140 @@ retention_df_list = list()
 
 for (year in seq(2012,2019)){
     retention_df_list$year = year 
-    retention_df_list[[year]] <- extract_enrollment(year)
+    retention_df_list[[year]] <- extract_retention(year)
 }
 
 retention_df <-  do.call(rbind, retention_df_list)
+retention_df %>% head
 ```
 
+```{r make retention panel data}
+retention_df <- retention_df %>% 
+    mutate(UNITID = as.integer(UNITID)) 
+retention_panel <- 
+    ipeds.hd %>% select(c(UNITID, INSTNM, ICLEVEL, CONTROL)) %>% right_join(retention_df, by = 'UNITID')
+retention_panel %>% mutate(RET.PCF = as.double(RET.PCF)) %>% head(10)
+```
 
+Retention rates do not need to be indexed like new first-year enrollment, our first indicator.
+
+# 2. Financial Measures
+
+# Ratio of Endowment to Expenses 
+
+Our next measure is a ratio of endowment to expenses. 
+
+This metric measures an institution's ability to meet its operating needs through tuition or the endowment, and whether an institution's costs have gotten out of control. 
+
+Here we need to collect data from two IPEDS surveys to create our panel. We use the `F_F2` table for total expense data and endowment asset value. 
+
+```{r check names}
+ipeds_2019 <- load_ipeds(2019)
+ipeds_2019 %>% names
+```
+
+```{r get expense ratio df}
+
+create_expense_ratio <- function(year){
+    #' extract endowment:expenses ratio for a given IPEDS year 
+    
+    year_two <- str_sub(toString(year - 1), -2, -1)
+    year_one <- str_sub(toString(year - 2), -2, -1)
+    
+    # get expense data 
+    
+    finance_string = paste0("F",year_one, year_two, "_F2")
+    finance <- ipeds_survey(finance_string, year) %>% 
+        select(c(UNITID, F2B02, F2H01)) %>% 
+        mutate(year = year, 
+               `endowment:expense` = F2H01 / F2B02)
+
+}
+
+## now create panel 
+
+ratio_df_list = list()
+
+for (year in seq(2012,2019)){
+    ratio_df_list$year = year 
+    ratio_df_list[[year]] <- create_expense_ratio(year)
+}
+
+ratio_df <-  do.call(rbind, ratio_df_list)
+ratio_df %>% head
+
+```
+
+We now have three of our four indicators! Sure we may have some additional filtering to do, but we've almost got the necessary components for our stress test. 
+
+# Market Price 
+
+This is the trickiest one. The Department of Education has undertaken a major effort to make college prices transparent. 
+
+This has included a requirement to disclose the net price of attendance at each post-secondary institution.
+
+Market prices are among the most discussed indicators in TCST. The market price is an institution's tuition fees less institution-granted financial aid. 
+
+Institutions that are likely to experience distress in the near future (or are already experiencing it) are often marked by lower and lower market prices--essentially putting their product (higher education) on sale. 
+
+This information is in the `SFA{YY}_P2` table. 
+
+```{r extract market price data, warning=F}
+extract_market_price <- function(year){
+    year_two <- str_sub(toString(year - 1), -2, -1)
+    year_one <- str_sub(toString(year - 2), -2, -1)
+    
+    survey_string <- paste0("SFA", year_one, year_two, "_P2")
+    survey <- ipeds_survey(survey_string, year) %>% 
+        select(c(UNITID, NPIST2, NPGRN2)) %>% 
+        transmute(UNITID = UNITID, 
+                  year = year, 
+                  avg_net_price = ifelse(!is.na(NPIST2), NPIST2, NPGRN2))
+    survey
+}
+
+extract_market_price(2018) %>% ggplot(aes(x = avg_net_price)) + 
+    geom_histogram(bins = 50, alpha = .8) + 
+    theme_bw() + 
+    ylab("Number of Institutions") + 
+    xlab("Average Net Price ($)") + 
+    ggtitle("Average Net Price of Attendance, 2017-2018") 
+    
+```
+Let's now generate our market price data frames just as we have before, and then join everything together. 
+
+```{r get net price df}
+price_list = list()
+
+for (year in seq(2012,2019)){
+    price_list$year = year 
+    price_list[[year]] <- extract_market_price(year)
+}
+
+price_df <-  do.call(rbind, price_list)
+
+```
+```{r creatae master df}
+master <- 
+    enrollment_panel_indexed %>% 
+    left_join(price_df, by = c('UNITID', 'year')) %>% 
+    left_join(retention_panel %>% select(c(UNITID, year, RET.PCF)), by = c('UNITID', 'year')) %>% 
+    left_join(ratio_df %>% select(c(UNITID, year, `endowment:expense`)), by = c("UNITID", "year"))
+
+master %>% write.csv("master_df.csv")
+```
+
+# Wrapping up
+
+We should now have just about everything to build our app.
+
+The code for the app is also available in this repo, [link](link) 
+
+# Session info 
+
+```{r session info}
+sessionInfo()
+```
 
 ---
 
