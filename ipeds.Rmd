@@ -73,6 +73,11 @@ In the repo, I've added the necessary data. If you want to replicate the rest of
 From the documentation:
 
 
+```{r}
+load_ipeds(2019) %>% names
+```
+
+
 >NCES provides data dictionaries with the IPEDS data. There are two main data frames that summarize the data that is available in any year, one describes all the data tables available and the other describes the variables within a data table. Both these data dictionaries are available using the `ipeds_help` function. 
 
 >The `table` parameter can be either the short `surveyID` from the `data(surveys)` data frame (see Appendix A), or the full table name in the result above. For example, `ipeds_help('HD2017', year = 2018)` and `ipeds_help('HD', year = 2018)` will return the same data frame. The advantage of the latter approach is that specific surveys can be retrieved across years. That is, `ipeds_help('HD')` will always return the directory information data frame for the most current IPEDS database.
@@ -103,7 +108,104 @@ ipeds_2019 <- load_ipeds(2019)
 names(ipeds_2019)
 ```
 
-So these are the surveys available to us for the 2019 data. Let's look at the first component of the stress test, first-year enrollment. 
+So these are the surveys available to us for the 2019 data. 
+
+# Overview of the data and clustering
+
+The TCST authors break down five classes of institutions. Their classification is based on graduation rates. 
+
+Let's see if we can replicate their findings using k-means clustering and two variables, graduation rate and market price (which we will use later as a component of the stress test).
+
+We'll only include four-year colleges and data from 2019 in this analysis to keep things clean(ish). 
+
+```{r get graduation rate and market price for k-means}
+gr.2019 <- ipeds_survey("GR200_18", 2019)
+hd.2019 <- ipeds_survey('HD', 2019) %>% select(c(UNITID, ICLEVEL)) # for filtering
+gr.2019 <- # get graduation rate for four-year colleges 
+    gr.2019 %>% select(c(UNITID, BAGR150)) %>% left_join(hd.2019) %>% filter(ICLEVEL == 1) 
+
+### get price data 
+
+mp.2019 <- ipeds_survey("SFA1718_P2", 2019) %>% 
+    select(c(UNITID, NPIST2, NPGRN2)) %>% 
+    transmute(UNITID = UNITID, 
+              year = year, 
+              avg_net_price = ifelse(!is.na(NPIST2), NPIST2, NPGRN2))
+
+combined <- 
+    gr.2019 %>% 
+    left_join(mp.2019, by = 'UNITID')
+
+### perform the clustering
+
+library(factoextra) # for plotting 
+
+
+
+# extract and scale data 
+# we need graduation rate ()
+
+```
+```{r run and visualize clusters}
+combined.scaled <- combined %>% 
+    mutate(graduation_rate = scale(BAGR150), 
+           avg_net_price = scale(avg_net_price)) %>% drop_na() # drop NaNs for clustering
+
+combined.km <- kmeans(combined.scaled[, c('graduation_rate', 'avg_net_price')], centers = 5, nstart = 20)
+
+cluster_viz <- fviz_cluster(combined.km, data = combined.scaled[, c('graduation_rate', 'avg_net_price')],
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800", "#f5427e", "#138211"), 
+             geom = "point",
+             ellipse.type = "convex", 
+             ggtheme = theme_bw()
+             )
+cluster_viz + 
+    ggtitle("Cluster Analysis of Four-Year Colleges and Universities") + 
+    xlab("Six Year Graduation Rate (z-score)") + 
+    ylab("Average Net Price (z-score)") + 
+    scale_color_manual(name = 'Institutional Level', 
+                       labels = c(
+                           "Medallion", # Good Buy
+                                   "Name Brand", # Good Opportunity
+                                   "Good Buy", # Convenience
+                                   "Good Opportunity", # Medallion
+                                   "Convenience" # Name Brand
+                           ),
+                       values = c(
+                           "#2E9FDF", 
+                           "#00AFBB",
+                           "#E7B800",
+                           "#f5427e",
+                           "#138211"
+                       )
+                       ) +
+    theme(plot.title = element_text(hjust = .25))
+```
+
+
+```{r}
+wss <- 0 
+
+for (i in 1:15) {
+  km.out <- kmeans(combined.scaled[, c('graduation_rate', 'avg_net_price')], centers = i, nstart = 20)
+  # Save total within sum of squares to wss variable
+  wss[i] <- km.out$tot.withinss
+}
+
+plot(1:15, wss, type = "b", 
+     xlab = "Number of Clusters", 
+     ylab = "Within groups sum of squares")
+
+
+```
+```{r}
+# how large is each cluster?
+table(combined.km$cluster) / sum(table(combined.km$cluster))
+```
+
+# 1. Enrollment data
+
+Let's look at the first component of the stress test, first-year enrollment. 
 
 Our aim here is to extract for a given college / university a time series looking at the percent change in freshman enrollment over a suitable time period. 
 
@@ -111,7 +213,6 @@ We then fit a linear regression line to the data, and project the line forward i
 
 If that doesn't make sense, it should when we're through this first example. 
 
-# 1. Enrollment data
 
 # Getting first-year enrollment
 
