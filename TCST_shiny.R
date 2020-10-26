@@ -5,7 +5,7 @@ library(tidyverse)
 library(hrbrthemes)
 library(readr)
 library(shinythemes)
-
+library(purrr)
 # set seed 
 set.seed(123)
 
@@ -112,29 +112,9 @@ ui <-
                plotOutput('market_price')
                ),
         column(width = 6,
-               ##### Try render plot with if / else expression
-               plotOutput("expense_appropriations"
-               )
-               )
+               plotOutput("expense_appropriations")
+               ),
         ),
-    
-    #### Spacer 
-    
-    fluidRow(
-        column(width = 3,
-               style = "background-color:#bd0000;"
-        ),
-        column(width = 9, 
-               style = 'background-color:bd0000;')
-    ),
-    
-    #### Distribution
-    
-    fluidRow(
-        column(12,
-               h4("Under construction")
-               )
-        )
     )
 
 
@@ -148,6 +128,37 @@ server <- function(input, output, session){
     
     
     #### Helpers 
+    
+    # Functions 
+    
+    build_model <- function(target){
+        #' Creates a linear model as part of score calculation pipeline 
+        
+        lm(year ~ target, data = plot_data())
+        
+    }
+    
+    check_critical_values <- function(target, crit_one, crit_two){
+        #' Calculate TSCT score for an element based on the slope of its trendline
+        #' crit_one the WARNING level 
+        #' crit_two the ALERT level
+        #' target: the name target column. eg `index_price_change`
+
+        # get vector of function evals 
+        
+        years <- seq(2019, 2025)
+        
+        eval <- purrr::map(years, ~slope*(.x) + intercept)
+        
+        # forecast values and check whether any are below crit values 
+        
+        score <- 
+            ifelse(
+                sum(eval < crit_two) >=1, 2, # if it passes the alert level, score 2  
+                   ifelse( # if it passes crit_one but not crit_two, then score 1 
+                       sum(eval < crit_one) >=1 & sum(eval < crit_two) ==0, 1, 0 ))
+        
+    }
     
     # Critical values
     
@@ -194,10 +205,6 @@ server <- function(input, output, session){
          pull(CONTROL) %>% mean()
          })
      
-     
-     
-     
-    
     ####### Render outputs 
      
     ####### Enrollment metrics 
@@ -216,6 +223,7 @@ server <- function(input, output, session){
                     ylab("First-year Undergraduate Enrollment Change (2011 = 100)") + 
                     xlab("Year") + 
                     theme(panel.grid.minor = element_blank()) + 
+                    scale_y_continuous(expand = c(.1, .1)) +
                     annotate("text", x = 2018, y = enrollment_warning + 3.5, label = "Warning level") + 
                     annotate("text", x = 2018, y = enrollment_alert + 3.5, label = "Alert level")
                 }
@@ -229,6 +237,7 @@ server <- function(input, output, session){
                 geom_smooth(method = 'lm', se = F, lty = 2) + 
                 theme_bw() + 
                 theme(panel.grid.minor = element_blank()) + 
+                scale_y_continuous(expand = c(.1, .1)) +
                 ggtitle(str_glue("Freshman Retention Rate at {input$school_select}")) + 
                 ylab("First to Second Year Retention Rate") + 
                 xlab("Year") + 
@@ -248,14 +257,15 @@ server <- function(input, output, session){
                 geom_smooth(method = 'lm', se = F, lty = 2) + 
                 theme_bw() + 
                 theme(panel.grid.minor = element_blank()) + 
+                scale_y_continuous(expand = c(.1, .1)) +
                 scale_y_continuous(labels=scales::dollar_format()) +
                 ggtitle(str_glue("Average Net Price at {input$school_select}")) + 
                 ylab("First to Second Year Retention Rate (2011 = 100)") + 
                 xlab("Year") + 
                 geom_hline(yintercept = price_warning, col = 'orange') + 
                 geom_hline(yintercept = price_alert, col = 'red') + 
-                annotate("text", x = 2018, y = price_warning + .5, label = "Warning level") + 
-                annotate("text", x = 2018, y = price_alert + .5, label = "Alert level")
+                annotate("text", x = 2018, y = price_warning + 1.5, label = "Warning level") + 
+                annotate("text", x = 2018, y = price_alert + 1.5, label = "Alert level")
         })
 
     output$expense_appropriations <- # try an eventReactive 
@@ -264,19 +274,20 @@ server <- function(input, output, session){
                 
                 if (ctrl() == 2) { # if CONTROL == 2 we have a PRIVATE institution -- endowment graph
                     
-                        ggplot(plot_data(), aes(x = year, y = `endowment.expense`)) + 
+                        ggplot(plot_data(), aes(x = year, y = index_ratio)) + 
                             geom_point() + 
                             geom_line(lty = 2, col = 'gray', lwd = 1) + 
                             geom_smooth(method = 'lm', se = F, lty = 2) + 
-                            theme_bw() + 
+                            theme_bw() +# intentionally broken 
                             theme(panel.grid.minor = element_blank()) + 
+                            scale_y_continuous(expand = c(.1, .1)) +
                             ggtitle(str_glue("Average Endowment:Expense Ratio at {input$school_select}")) + 
                             ylab("Endowment:Expense Ratio (2011 = 100)") + 
                             xlab("Year") + 
                             geom_hline(yintercept = ratio_warning, col = 'orange') + 
                             geom_hline(yintercept = ratio_alert, col = 'red') + 
-                            annotate("text", x = 2018, y = ratio_warning + .5, label = "Warning level") + 
-                            annotate("text", x = 2018, y = ratio_alert + .5, label = "Alert level")
+                            annotate("text", x = 2018, y = ratio_warning + 1.5, label = "Warning level") + 
+                            annotate("text", x = 2018, y = ratio_alert + 1.5, label = "Alert level")
                     }
                 
                 else if (ctrl() == 1){ ## public
@@ -285,29 +296,81 @@ server <- function(input, output, session){
                         geom_line(lty = 2, col = 'gray', lwd = 1) +
                         geom_smooth(method = 'lm', se = F, lty = 2) +
                         theme_bw() +
-                        theme(panel.grid.minor = element_blank()) + 
+                        scale_y_continuous(expand = c(.1, .1)) +
+                        theme(panel.grid.minor = element_blank()) +
                         ggtitle(str_glue("Total State and Local Appropriations at {input$school_select}")) +
                         ylab("Total Appropriations (2011 = 100)") +
                         xlab("Year") + 
                         geom_hline(yintercept = appropriation_warning, col = 'orange') + 
                         geom_hline(yintercept = appropriation_alert, col = 'red') + 
-                        annotate("text", x = 2018, y = appropriation_warning + .5, label = "Warning level") + 
-                        annotate("text", x = 2018, y = appropriation_alert + .5, label = "Alert level")
+                        annotate("text", x = 2018, y = appropriation_warning + 1.5, label = "Warning level") + 
+                        annotate("text", x = 2018, y = appropriation_alert + 1.5, label = "Alert level")
                 }
                 
             # community colleges filtered out. ELSE condition is for-profit or NaNs 
             
-
-            #### Calculate Score -- four binary metrics 
-            
-            # 1. Are any of the data points below the alert or warning levels?   
-            
-            
-            
         })
     
+    #### Calculate Score -- four binary metrics 
+    
+    # 1. Are any of the data points below the alert or warning levels?
+    
+    enrollment_data_score <- ifelse(sum(plot_data() %>% pull(index_enrollment_change) < enrollment_warning) >=1, 1, 0)
+    
+    retention_data_score <- ifelse(sum(plot_data() %>% pull(RET.PCF) < retention_warning) >= 1, 1, 0)
+    
+    price_data_score <- ifelse(sum(plot_data() %>% pull(index_price_change) < price_warning) >=1, 1, 0)
+    
+    if (ctrl() == 1){ # public
+        ratio_data_score = ifelse(sum(plot_data() %>% pull(index_total_appropriations) < appropriation_warning) >=1, 1, 0)
+    }
+    
+    else {
+        ratio_data_score <- ifelse(sum(plot_data() %>% pull(index_ratio) < ratio_warning) >=1, 1, 0)
+        }
+    
+    # 2. Does the trendline approach the alert or warning thresholds? 
+    
+    enrollment_crits <- check_critical_values(target = index_enrollment_change, 
+                                              crit_one = enrollment_warning, 
+                                              crit_two = enrollment_alert)
+    
+    retention_crits <- check_critical_values(target = RET.PCF, 
+                                             crit_one = retention_warning, 
+                                             crit_two = retention_alert)
+    
+    price_crits <- check_critical_values(target = index_price_change, 
+                                         crit_one = price_warning, 
+                                         crit_two = price_alert)
+    
+    if (ctrl() == 1){ # public so we use appropriations 
+        expense_appropriations_crit <- check_critical_values(target = index_total_appropriations, 
+                                                             crit_one = appropriation_warning, 
+                                                             crit_two = appropriation_warning)
+    }
+    
+    else {
+        expense_appropriations_crit <- check_critical_values(target = index_ratio,
+                                                             crit_one = ratio_warning, 
+                                                             crit_two = ratio_alert)
+    }
+    
+    # compute scores 
+    
+    enrollment_score <- (enrollment_data_score + enrollment_crits)
+    retention_score <- (retention_data_score + enrollment_crits) 
+    price_score <- (price_data_score + price_crits) 
+    expense_appropriations_score <- ratio_data_score
+    
+    overall_score <-  
+        enrollment_score + 
+        retention_score + 
+        price_score + 
+        expense_appropriations_score
+        
+    
     output$score <- renderText({
-        "Under construction"
+        overall_score
     })
         
         }
