@@ -1,9 +1,12 @@
 ---
-title: "Implementing the College Stress Test with data from the Integrated Postsecondary Education Data System (IPEDS)"
+title: Implementing the College Stress Test with data from the Integrated Postsecondary
+  Education Data System (IPEDS)
 author: "A. M. Leedom"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
-output: pdf_document
-
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
 ---
 # Introduction and Setup
 
@@ -30,7 +33,7 @@ getOption('ipeds.download.dir')
 
 It should be noted that data files downloaded to the package directory will be deleted for each new R or `ipeds` installation. The default location to download data files can be changed by specifying the `ipeds.download.dir` system property using the `options` command. I've set it to a folder within my working directory. The data will be uploaded to GitHub as part of the finished product. 
 
-```{r download_directory_set, eval = F}
+```{r download_directory_set, eval = T}
 # set the directory to our project folder
 ipeds_dir <- paste0(getwd(), "/ipeds_data")
 options('ipeds.download.dir' = ipeds_dir)
@@ -62,7 +65,7 @@ From the documentation:
 
 Let's download the latest available `provisional` surveys, from 2018-19. 
 
-```{r download ipeds, message=FALSE}
+```{r download ipeds, message=FALSE, eval = F}
 download_ipeds(2019, cleanup = T, dir = 'ipeds_data')
 ```
 
@@ -94,12 +97,6 @@ ipeds_help('IC', 2019) %>% as_tibble() %>% head() # preview
 
 # Getting Data
 
-Let's look again at the IPEDS data we have downloaded: 
-
-```{r available ipeds}
-available_ipeds() %>% tail
-```
-
  `load_ipeds`  will return a list with all the data tables for the given year.
 
 ```{r ipeds 2019 names}
@@ -129,7 +126,7 @@ gr.2019 <- # get graduation rate for four-year colleges
 mp.2019 <- ipeds_survey("SFA1718_P2", 2019) %>% 
     select(c(UNITID, NPIST2, NPGRN2)) %>% 
     transmute(UNITID = UNITID, 
-              year = year, 
+              year = 2019, 
               avg_net_price = ifelse(!is.na(NPIST2), NPIST2, NPGRN2))
 
 combined <- 
@@ -341,7 +338,7 @@ enrollment_df %>% filter(UNITID == test) %>% ggplot(aes(x = year, y = EFUG1ST)) 
 # To calculate the stress test, we need to index the change in enrollment starts to the first year in our dataset 
 
 enrollment_panel_indexed <- 
-    enrollment_panel %>% 
+    enrollment_df %>% # changed from enrollment_panel
     group_by(UNITID) %>% 
     mutate(index_enrollment_change = (EFUG1ST / first(EFUG1ST) - 1 * 100) +  100) %>% 
     mutate(index_enrollment_change = index_enrollment_change * 100) %>%
@@ -392,12 +389,28 @@ The authors of TCST establish the `warning` and `alert` thresholds thus:
 
 Let's look at the distribution of percentage change in `EFUG1ST` over our time period (2012 - 2019). (I've indexed the values to 100, so we should see percentage changes in whole numbers.)
 
+```{r}
+enrollment_panel_indexed %>% filter(CONTROL == 1)
+```
+```{r delete this cell}
+enrollment_change.public_fy <- enrollment_panel_indexed  %>% 
+    filter(CONTROL == 1, # public, four-year
+           ICLEVEL == 1) %>% 
+    group_by(UNITID) %>% 
+    mutate(overall_pct_change = last(index_enrollment_change) - 100) %>% 
+    select(c(UNITID, overall_pct_change)) %>%
+    right_join(unique_schools, by = 'UNITID') %>% 
+    drop_na %>% 
+    unique
+```
+
+
 ```{r establish alert and warning levels for freshman enrollment, warning = F} 
 # get list of IDs for joining
 
 unique_schools <- unique(enrollment_panel$UNITID)
 unique_schools <- unique_schools %>% as_tibble %>% set_names('UNITID')
-unique_schools
+
 
 enrollment_change.public_fy <- enrollment_panel_indexed  %>% 
     filter(CONTROL == 1, # public, four-year
@@ -423,6 +436,35 @@ enrollment_change.public_fy %>%
     xlab("Percentage Change in FY Enrollment, 2012 - 2019") + 
     theme(plot.title = element_text(hjust = .7))
 ```
+
+And we can look at all four-year colleges in the same way: 
+
+```{r enrollment change, all four-year schools}
+enrollment_change.fy <- enrollment_panel_indexed  %>% 
+    filter(ICLEVEL == 1, 
+           index_enrollment_change > 0) %>% #only grab four-year schools
+    group_by(UNITID) %>% 
+    mutate(overall_pct_change = last(index_enrollment_change) - 100) %>% 
+    select(c(UNITID, overall_pct_change)) %>%
+    right_join(unique_schools, by = 'UNITID') %>% 
+    drop_na %>% 
+    unique
+
+print(quantile(enrollment_change.fy$overall_pct_change, c(.1, .25)))
+
+enrollment_change.fy %>% 
+    ggplot(aes(x = overall_pct_change)) + 
+    geom_histogram(bins = 100, alpha = .8) + 
+    xlim(-200, 200) + 
+    theme_bw() + 
+    geom_vline(xintercept = quantile(enrollment_change.public_fy$overall_pct_change, .1), lty = 2, col = 'red') + 
+    geom_vline(xintercept = quantile(enrollment_change.public_fy$overall_pct_change, .25), lty = 2, col = 'orange') + 
+    ggtitle("Distribution of Percentage Change in Freshman Enrollment at Four-Year Institutions") + 
+    ylab("Number of Schools") + 
+    xlab("Percentage Change in FY Enrollment, 2012 - 2019") + 
+    theme(plot.title = element_text(hjust = .7))
+```
+
 
 # Retention Rates
 
@@ -569,6 +611,46 @@ master <-
 master %>% write.csv("master_df.csv")
 ```
 
+# Get appropriations data 
+
+We need to get appropriations data for public colleges and universities. 
+
+```{r get state appropriations}
+
+## state appropriations for public colleges 
+extract_appropriations <- function(year){ 
+    #' extract enrollment data from IPEDS surveys in a given year 
+    ipeds <- load_ipeds(year)
+    year_two <- str_sub(toString(year - 1), -2, -1)
+    year_one <- str_sub(toString(year - 2), -2, -1)
+    survey_string <- paste0("F", year_one, year_two, "_F2")
+    survey <- ipeds_survey(survey_string, year) %>% 
+        select(c(UNITID, F2D02, F2D03, F2D04)) %>% 
+        transmute(UNITID = UNITID, 
+                  year = year, 
+                  total_appropriations = rowsum.data.frame(c(F2D02, F2D03, F2D04)))
+    survey
+}
+    
+
+appropriations_list = list()
+
+for (year in seq(2012,2019)){
+    appropriations_list$year = year 
+    appropriations_list[[year]] <- extract_appropriations(year)
+}
+
+appropriations_df <-  do.call(rbind, appropriations_list)
+
+appropriations_df %>% head(25)
+```
+
+```{r}
+appropriations_df %>% head(25)
+```
+
+
+
 # Wrapping up
 
 We should now have just about everything to build our app.
@@ -580,6 +662,8 @@ The code for the app is also available in this repo, [link](link)
 ```{r session info}
 sessionInfo()
 ```
+
+
 
 ---
 
