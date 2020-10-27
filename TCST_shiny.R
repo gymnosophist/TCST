@@ -1,5 +1,12 @@
 ### Shiny app for TCST project ### 
 
+
+## TODO: 
+# Ensure formula generates correct / consistent TCST resulst 
+# Fix `index_ratio` variable to scale properly 
+
+
+
 library(shiny)
 library(tidyverse)
 library(readr)
@@ -8,19 +15,24 @@ library(purrr)
 # set seed 
 set.seed(123)
 
-# load data 
+
+# load and adjust data ---------------------------------------------------------
+
 data <- read.csv('updated_master.csv')
 
 data <- 
     data %>% # filter out two-year colleges 
-    filter(ICLEVEL == 1)
+    filter(ICLEVEL == 1) %>% # add freshman class size as a proxy for "league" / competition... could be other ways of doing this 
+    mutate(size = cut_width(.$EFUG1ST, width = 500, boundary = 0))
 
 select_school_list <- 
     data %>% 
     select(INSTNM) %>% 
     unique %>% arrange(INSTNM)
 
-# set critical values -- We can hard code those taken from the original TCST or generate our own \
+
+# set critical values -----------------------------------------------------
+
 # warnings set at 25th percentile, alerts at 10th 
 
 
@@ -49,12 +61,12 @@ ratio_alert <- quantile(data$index_ratio, .1, na.rm = T)
 appropriation_warning <- quantile(data$index_total_appropriations, .2, na.rm = T)
 appropriation_alert <- quantile(data$index_total_appropriations, .1, na.rm = T)
 
-# TODO: 
-# Adjust window sizes to accommodate variations in scale 
-# 
 
 
-### Define UI ### 
+
+
+
+# Define UI ---------------------------------------------------------------
 
 ui <-
     fluidPage(
@@ -75,13 +87,14 @@ ui <-
                style = 'background-color:bd0000;')
     ),
     
-    ######## Input and score
+
+# UI for Input and score --------------------------------------------------
     
     fluidRow(
         column(6,
         h3("Choose a school down here 👇  to see its Stress Test score components and score over here -->"),
         inputPanel(
-            selectizeInput(inputId = "school_select", # try selectizeInput
+            selectizeInput(inputId = "school_select", 
                         label = "Type in the name of a school:", 
                         choices = select_school_list, 
                         options = list(maxOptions = 5)
@@ -89,12 +102,14 @@ ui <-
             )
     ),
     column(6, 
-           h3("Data Table:"), 
+           h3("Score Components. These range from 0 (good) to 12 (worse)"), 
            tableOutput("score")
            )
     ),
     
-    ####### Display output
+
+# First Display output - line plots ----------------------------------------------------
+
     fluidRow(
         column(width = 6,
                plotOutput("enrollment_plot")
@@ -105,7 +120,6 @@ ui <-
         ),
     
     ####### Finance 
-    ####### Here we need a conditional plot depending on the kind of school selected 
     
     fluidRow(
         column(width = 6,
@@ -117,10 +131,28 @@ ui <-
         ),
     fluidRow(
         column(6, textOutput('text'))
+    ), 
+    
+
+# display 2 Comparisons and distributions  --------------------------------
+    
+    fluidRow(
+        column(12,
+               h2(textOutput("school_name"))
+               )
+    ),
+    fluidRow(
+        column(6, # plot distributions
+               textOutput("distro")
+                   ),
+        column(6, # fun facts?
+               textOutput("fun_facts")
+        )
     )
     )
 
 
+# Server.R ----------------------------------------------------------------
 
 
 server <- function(input, output, session){
@@ -173,7 +205,98 @@ server <- function(input, output, session){
     
     ### Setup 
     
-    # make variable reactive 
+
+# Compute sample score distribution ---------------------------------------
+
+    # Define functions --------------------------------------------------------
+    
+        build_model <- function(target){
+            #' Creates a linear model as part of score calculation pipeline 
+            
+            lm(year ~ target, data = data)
+            
+        }
+        
+        check_critical_values <- function(col, crit_one, crit_two, data = data){
+            #' Calculate TSCT score for an element based on the slope of its trendline
+            #' crit_one the WARNING level 
+            #' crit_two the ALERT level
+            #' col: the name target column. eg `index_price_change`
+            
+            # get vector of function evals 
+            
+            target <- col
+            
+            model <- lm(year ~ target, data = data)
+            
+            slope <- model$coefficients[[2]]
+            intercept <- model$coefficients[[1]]
+            
+            years <- seq(2019, 2025)
+            
+            eval <- purrr::map(years, ~slope*(.x) + intercept)
+            
+            # forecast values and check whether any are below crit values 
+            
+            score <- 
+                ifelse(
+                    sum(eval < crit_two) >=1, 2, # if it passes the alert level, score 2  
+                    ifelse( # if it passes crit_one but not crit_two, then score 1 
+                        sum(eval < crit_one) >=1 & sum(eval < crit_two) ==0, 1, 0 ))
+            
+        }
+        
+        calculate_data_score <- function(target, critical_value, data = data){ # breaks 
+            #' calculates the TSCT score for whether a data point falls below a critical value 
+            #' target: target column 
+            #' critical_value: threshold for setting score 
+            
+            
+            score <- ifelse(sum(data$target < critical_value) >= 2, 1, 0)
+        }
+        
+    
+    # Store the distribution of scores for comparisson across schools     
+    
+    # public_scores <- 
+    #     data %>%
+    #     filter(CONTROL == 1) %>%
+    #     group_by(UNITID) %>% # group by school, compute score components
+    #     mutate( # calculate data scores adding columns to store results
+    #         enrollment_data_score = ifelse(sum(.$index_enrollment_change < enrollment_warning) >=2, 1 , 0),
+    #         retention_data_score = ifelse(sum(.$RET.PCF < retention_warning) >=2, 1 , 0),
+    #         price_data_score = ifelse(sum(.$index_price_change < price_warning) >=2, 1 , 0),
+    #         appropriation_data_score = ifelse(sum(.$index_total_appropriations < appropriation_warning) >=2, 1 , 0),
+    #         # add trend scores 
+    #     enrollment_trend_score = check_critical_values(col = index_enrollment_change, crit_one = enrollment_warning, enrollment_alert), 
+    #     retention_trend_score = check_critical_values(RET.PCF, retention_warning, retention_alert), 
+    #     price_trend_score = check_critical_values(index_price_change, price_warning, price_alert), 
+    #     appropriation_trend_score = check_critical_values(index_total_appropriations, appropriation_warning, appropriation_alert),
+    #     # add size for comparison 
+    #     size = cut_width(.$EFUG1ST, width = 500, boundary = 0)
+    #     ) %>% 
+    #     ungroup()
+    # 
+    # private_scores <- 
+    #     data %>%
+    #     filter(CONTROL != 1) %>% # private schools 
+    #     group_by(UNITID) %>% # group by school, compute score components
+    #     mutate( # calculate data scores adding columns to store results
+    #         enrollment_data_score = ifelse(sum(.$index_enrollment_change < enrollment_warning) >=2, 1 , 0),
+    #         retention_data_score = ifelse(sum(.$RET.PCF < retention_warning) >=2, 1 , 0),
+    #         price_data_score = ifelse(sum(.$index_price_change < price_warning) >=2, 1 , 0),
+    #         ratio_data_score = ifelse(sum(.$index_ratio < ratio_alert) >= 2, 1, 0), 
+    #         # add trend scores 
+    #         enrollment_trend_score = check_critical_values(col = .$index_enrollment_change, crit_one = enrollment_warning, enrollment_alert), 
+    #         retention_trend_score = check_critical_values(col = .$RET.PCF, retention_warning, retention_alert), 
+    #         price_trend_score = check_critical_values(col = .$index_price_change, price_warning, price_alert), 
+    #         ratio_trend_score = check_critical_values(col = .$index_ratio, ratio_warning, ratio_alert),
+    #         # add size for comparison 
+    #         size = cut_width(.$EFUG1ST, width = 500, boundary = 0)
+    #     ) 
+    
+
+# reactive variables ------------------------------------------------------
     
     stage_data = reactiveVal(data)
     
@@ -189,54 +312,37 @@ server <- function(input, output, session){
      
      eventReactive(plot_data(), {print(plot_data())})
      
-     ### Functions 
+
+# Render outputs  ---------------------------------------------------------
+
+
+# School name -------------------------------------------------------------
+
+     output$school_name <- 
+         toString(event_reactive(input$school_select, {input$school_select}))
      
-     build_model <- function(target){
-         #' Creates a linear model as part of score calculation pipeline 
+
+# TODO Fun facts table ---------------------------------------------------------
+##TODO 
+     output$fun_facts <- 
+         renderText({
+                 str_glue("{'selected school'} is the {'quantile'} among {'n'} schools for enrollment scores Under construction")
+             })
          
-         lm(year ~ target, data = plot_data())
-         
-     }
+
+# debug histogram ---------------------------------------------------------
      
-     check_critical_values <- function(target, crit_one, crit_two, data = plot_data()){
-         #' Calculate TSCT score for an element based on the slope of its trendline
-         #' crit_one the WARNING level 
-         #' crit_two the ALERT level
-         #' target: the name target column. eg `index_price_change`
-         
-         # get vector of function evals 
-         target <- data %>% pull(target)
-         model <- lm(year ~ target(), data = data)
-         
-         slope <- model$coefficients[[2]]
-         intercept <- model$coefficients[[1]]
-         
-         years <- seq(2019, 2025)
-         
-         eval <- purrr::map(years, ~slope*(.x) + intercept)
-         
-         # forecast values and check whether any are below crit values 
-         
-         score <- 
-             ifelse(
-                 sum(eval < crit_two) >=1, 2, # if it passes the alert level, score 2  
-                 ifelse( # if it passes crit_one but not crit_two, then score 1 
-                     sum(eval < crit_one) >=1 & sum(eval < crit_two) ==0, 1, 0 ))
-         
-     }
-     
-     calculate_data_score <- function(target, critical_value, data = plot_data()){
-         #' calculates the TSCT score for whether a data point falls below a critical value 
-         #' target: target column 
-         #' critical_value: threshold for setting score 
-         
-         target <- data %>% pull(target)
-         score <- ifelse(sum(target < critical_value) >= 2, 1, 0)
-     }
-     
-    ####### Render outputs 
-     
-    ####### Enrollment metrics 
+    
+    
+    output$distro <- # histogram (/ violinplot or something cooler?)
+        
+        # distro_data() %>% ggplot(aes(x = `SCORES`)) + # need scores 
+        # geom_histogram(bins = 30) + 
+        # geom_hline(plot_data() %>% select(`SCORES`))
+        # xlab("Histogram")  
+        
+
+# enrollment metrics -- EFUG | RET.PCF -----------------------------------------------------
      
     output$enrollment_plot <- # `EFUG1ST`
         renderPlot(
@@ -276,8 +382,9 @@ server <- function(input, output, session){
                 annotate("text", x = 2018, y = retention_alert + .5, label = "Alert level")
         })
         
-    #### Financial Metrics 
-    
+
+# financial metrics -- market price, endowment, app -----------------------
+
     output$market_price <- 
         renderPlot({
             ggplot(plot_data(), aes(x = year, y = index_price_change)) + 
@@ -340,9 +447,10 @@ server <- function(input, output, session){
             
         })
     
-    #### Calculate Score -- four binary metrics 
-    
-    # 1. Are any of the data points below the alert or warning levels?
+
+# Calculate score 1. Are any of the data points below the alert or warning levels? ------------------------
+
+    # Are any of the data points below the alert or warning levels?
 
     enrollment_score <- 
         eventReactive(plot_data(), {
@@ -383,8 +491,10 @@ server <- function(input, output, session){
 
     
     
-    # 2. Does the trendline approach the alert or warning thresholds?
-    # Function didn't work for this, which leads to code bloat 
+
+# Calculate score 2. Does the trendline approach the alert or warning thresholds? --------
+    
+    # Function didn't work for this, which led to code bloat 
     
     enrollment_crits <- eventReactive(plot_data(), {
         
@@ -453,7 +563,8 @@ server <- function(input, output, session){
         })
     
 
-    # compute scores
+
+# compute scores ----------------------------------------------------------
     
     data_score <- eventReactive(plot_data(), {if (ctrl() == 1){
         price_data_score() + enrollment_score() + retention_data_score() + appropriations_data_score()
@@ -474,7 +585,8 @@ server <- function(input, output, session){
         }
     })
     
-    # Create output table 
+
+# Create output table -----------------------------------------------------
     
     out_table <- eventReactive(plot_data(), {
         if (ctrl() == 1){
@@ -496,9 +608,10 @@ server <- function(input, output, session){
     
     
     output$score <- renderTable({
-        tibble("Data" = as.integer(data_score()), 
+        tibble("Metric" = c("Enrollment", "Financial"),
+            "Data" = as.integer(data_score()), 
                "Trend" = as.integer(trend_score()), 
-               "Total" = as.integer(data_score() + trend_score()))
+               "Total (/12)" = as.integer(data_score() + trend_score()))
     })
     
     output$text <- renderText({
