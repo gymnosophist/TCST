@@ -1,12 +1,6 @@
 ### Shiny app for TCST project ###
 
 
-## TODO:
-# Fix functions to calculate scores
-# Ensure formula generates correct / consistent TCST results
-# Fix `index_ratio` variable to scale properly
-
-
 
 library(shiny)
 library(tidyverse)
@@ -21,7 +15,7 @@ set.seed(123)
 # load and adjust data ---------------------------------------------------------
 
 data <- # filter out two-year colleges
-    read.csv('tcst_data_updated.csv') %>%
+    read.csv('data/tcst_data_updated.csv') %>%
     filter(level == 1) %>%
     filter(control == 1 | control == 2) %>%
     # add freshman class size as a proxy for "league" / competition... could be other ways of doing this
@@ -43,7 +37,7 @@ select_school_list <-
 
 # set critical values -----------------------------------------------------
 
-# warnings set at 25th percentile, alerts at 10th
+# warnings set at 20th percentile, alerts at 10th
 
 
 ## 1 - First-year UG enrollment
@@ -173,9 +167,11 @@ ui <-
                         plotOutput("distro")),
                  column(6, # fun facts?
                         plotOutput("lollipop"))),
-        fluidRow(column(12, 
-                        style = "background-color:#D3D3D3", 
-                        h2("Thanks for reading")))
+        fluidRow(column(12,
+                        style = "background-color:#D3D3D3",
+                        h2(
+                            "Thanks for reading!"
+                        )))
     )
 
 
@@ -197,11 +193,11 @@ server <- function(input, output, session) {
     
     
     data <- # filter out two-year colleges
-        read.csv('tcst_data_updated.csv') %>%
+        read.csv('data/tcst_data_updated.csv') %>%
         filter(level == 1) %>%
         filter(control == 1 | control == 2) %>%
         # add freshman class size as a proxy for "league" / competition... could be other ways of doing this
-        mutate(size = cut_interval(freshman_enrollment, 5)) %>% 
+        mutate(size = cut_interval(freshman_enrollment, 5)) %>%
         mutate(size_bucket = as.integer(as.factor(size)))
     
     data <-
@@ -219,29 +215,29 @@ server <- function(input, output, session) {
         unique
     
     public_scores <- # drop_na
-        read_csv('total_public_scores_2.csv') %>% drop_na() %>% 
+        read_csv('data/total_public_scores_2.csv') %>% drop_na() %>%
         mutate(
-            total = enrollment_data_score + 
-                retention_data_score + 
-                price_data_score + 
-                appropriation_data_score + 
-                enrollment_trend + 
-                price_trend + 
-                retention_trend + 
+            total = enrollment_data_score +
+                retention_data_score +
+                price_data_score +
+                appropriation_data_score +
+                enrollment_trend +
+                price_trend +
+                retention_trend +
                 appropriations_trend
         )
     
     
     private_scores <- # drop na
-        read_csv('total_private_scores_2.csv')  %>% drop_na() %>%
+        read_csv('data/total_private_scores_2.csv')  %>% drop_na() %>%
         mutate(
-            total = enrollment_data_score + 
-                retention_data_score + 
-                price_data_score + 
-                ratio_data_score + 
-                enrollment_trend + 
-                price_trend + 
-                retention_trend + 
+            total = enrollment_data_score +
+                retention_data_score +
+                price_data_score +
+                ratio_data_score +
+                enrollment_trend +
+                price_trend +
+                retention_trend +
                 ratio_trend
         )
     
@@ -338,7 +334,7 @@ server <- function(input, output, session) {
             
         })
     
-    size_select <- 
+    size_select <-
         eventReactive(plot_data(), {
             plot_data() %>% pull(size_bucket) %>% .[[1]]
         })
@@ -354,16 +350,15 @@ server <- function(input, output, session) {
                 as.numeric() %>%
                 mean(., na.rm = T)
         })
-        
     
     
     
-    # Render outputs  ---------------------------------------------------------
+    
     
     # score table ---------------------------------------------------------
     
     
-    output$score <-  
+    output$score <-
         eventReactive(plot_data(), {
             if (ctrl() == 1) {
                 tibble(
@@ -378,9 +373,9 @@ server <- function(input, output, session) {
                     ),
                     "State appropriations score" = (
                         score_table()$appropriation_data_score + score_table()$appropriations_trend
-                    ), 
+                    ),
                     "Total" = score_table()$total
-                ) %>% knitr::kable(align = rep('c', 5)) %>% column_spec(5, bold = T, border_left = T) %>% kable_styling() 
+                ) %>% knitr::kable(align = rep('c', 5)) %>% column_spec(5, bold = T, border_left = T) %>% kable_styling()
                 
             }
             else {
@@ -396,71 +391,76 @@ server <- function(input, output, session) {
                     ),
                     "Expense ratio score" = (
                         score_table()$ratio_data_score + score_table()$ratio_trend
-                    ), 
-                    "Total" = (
-                        score_table()$total
-                    )
-                ) %>% knitr::kable(align = rep('c', 5)) %>% column_spec(5, bold = T, border_left = T) %>% kable_styling() 
+                    ),
+                    "Total" = (score_table()$total)
+                ) %>% knitr::kable(align = rep('c', 5)) %>% column_spec(5, bold = T, border_left = T) %>% kable_styling()
                 
             }
         })
     
     # Distribution ---------------------------------------------------------
     
-    ## Distribution done -- would it be better as a scatterplot? 
+    ## Distribution done -- would it be better as a scatterplot?
     
     # munge data
-    distro_data <- 
-        eventReactive(
-            plot_data(), {
-                stage_data() %>% 
-                    filter(size_bucket == size_select()) %>% 
-                    left_join(all_scores_total, by = 'id')
-            }
-        )
+    distro_data <-
+        eventReactive(plot_data(), {
+            stage_data() %>%
+                filter(size_bucket == size_select()) %>%
+                left_join(all_scores_total, by = 'id')
+        })
     
-    scatter_data <- 
-        eventReactive(ctrl(),{
-            if (ctrl() == 1){
-                stage_data() %>% 
-                    filter(size_bucket == size_select(), 
-                           control == ctrl()) %>% 
-                    left_join(public_scores, by = 'id') %>% 
+    scatter_data <-
+        eventReactive(ctrl(), {
+            if (ctrl() == 1) {
+                stage_data() %>%
+                    filter(size_bucket == size_select(),
+                           control == ctrl()) %>%
+                    left_join(public_scores, by = 'id') %>%
                     mutate(
-                        x = enrollment_data_score + retention_data_score + enrollment_trend + retention_trend, 
+                        x = enrollment_data_score + retention_data_score + enrollment_trend + retention_trend,
                         y = price_trend + price_data_score + appropriations_data_score + appropriations_trend
                     )
             }
             else {
-                stage_data() %>% 
-                    filter(size_bucket == size_select(), 
-                           control == ctrl()) %>% 
-                    left_join(private_scores, by = 'id') %>% 
+                stage_data() %>%
+                    filter(size_bucket == size_select(),
+                           control == ctrl()) %>%
+                    left_join(private_scores, by = 'id') %>%
                     mutate(
-                        x = enrollment_data_score + retention_data_score + enrollment_trend + retention_trend, 
+                        x = enrollment_data_score + retention_data_score + enrollment_trend + retention_trend,
                         y = price_trend + price_data_score + ratio_data_score + ratio_trend
                     )
             }
-            })
-        
+        })
     
-    output$distro <- 
+    
+    output$distro <-
         renderPlot({
             distro_data() %>%
                 mutate(fill_col = ifelse(total.x < plot_data()$total[[1]], 1, 0)) %>%
                 
-                ggplot(x = total.x, ) +
-                geom_density(aes(x = total.x, fill = '#69b3a2', alpha = .8)) +
-                scale_fill_manual(values = '#69b3a2') + 
-                geom_vline(xintercept = plot_data()$total[[1]],
-                           lty = 1,
-                           alpha = .8) + # school marker
+                ggplot(x = total.x,) +
+                geom_density(aes(
+                    x = total.x,
+                    fill = '#69b3a2',
+                    alpha = .8
+                )) +
+                scale_fill_manual(values = '#69b3a2') +
+                geom_vline(
+                    xintercept = plot_data()$total[[1]],
+                    lty = 1,
+                    alpha = .8
+                ) + # school marker
                 xlab("Stress Test Score") +
-                annotate('text',
-                         x = plot_data()$total[[1]] + 1.75,
-                         y = .29,
-                         label = "Your school's score") +
-                geom_segment( # arrow to school's score 
+                annotate(
+                    'text',
+                    x = plot_data()$total[[1]] + 1.75,
+                    y = .29,
+                    label = "Your school's score"
+                ) +
+                geom_segment(
+                    # arrow to school's score
                     x = plot_data()$total[[1]] + 1,
                     xend = plot_data()$total[[1]] + .1,
                     y = .3,
@@ -474,16 +474,17 @@ server <- function(input, output, session) {
                     color = '#d17171',
                     lwd = .5
                 ) +
-                geom_segment( # arrow to average 
-                    x = avg_score_by_size() + 1, 
-                    xend = avg_score_by_size() + .1, 
-                    y = .255, 
-                    yend = .275, 
+                geom_segment(
+                    # arrow to average
+                    x = avg_score_by_size() + 1,
+                    xend = avg_score_by_size() + .1,
+                    y = .255,
+                    yend = .275,
                     color = '#d17171',
-                    lty = 1, 
+                    lty = 1,
                     lwd = .5,
                     arrow = arrow(length = unit(.5, 'cm'))
-                ) + 
+                ) +
                 annotate('text',
                          x = avg_score_by_size() + 1.75,
                          y = .25,
@@ -491,20 +492,25 @@ server <- function(input, output, session) {
                 ylab("Percentage of Schools") +
                 ggtitle("Score distribution among similar schools") +
                 theme_bw() +
-                theme(legend.position = "none", 
-                      panel.grid = element_blank())  + 
-                scale_x_continuous(breaks = seq(0,12, by = 1))
+                theme(
+                    legend.position = "none",
+                    panel.grid = element_blank(),
+                    axis.title.x = element_text(size = rel(1.2)),
+                    axis.title.y = element_text(size = rel(1.2))
+                )  +
+                scale_x_continuous(breaks = seq(0, 12, by = 1))
         })
     
     # Lollipop ----------------------------------------------------------------
     
-    ## TODO
+  
     
-    # prepare data for lollipop chart 
+    # prepare data for lollipop chart
     
-    # 1. Get average scores for each component 
+    # 1. Get average scores for each component
     
-    score_averages <- eventReactive(plot_data(), { # ugly. 
+    score_averages <- eventReactive(plot_data(), {
+        # ugly.
         if (ctrl() == 1) {
             stage_data() %>%
                 filter(size_bucket == size_select()) %>%
@@ -512,10 +518,19 @@ server <- function(input, output, session) {
                 left_join(public_scores, by = 'id') %>%
                 group_by(id) %>%
                 summarise(
-                    mean_enrollment_score = mean(.$enrollment_data_score + .$enrollment_trend, na.rm = T),
-                    mean_retention_score = mean(.$retention_data_score + .$retention_trend, na.rm = T),
+                    mean_enrollment_score = mean(
+                        .$enrollment_data_score + .$enrollment_trend,
+                        na.rm = T
+                    ),
+                    mean_retention_score = mean(
+                        .$retention_data_score + .$retention_trend,
+                        na.rm = T
+                    ),
                     mean_price_score = mean(.$price_data_score + .$price_trend, na.rm = T),
-                    mean_appropriation_score = mean(.$appropriation_data_score + .$appropriations_trend, na.rm = T)
+                    mean_appropriation_score = mean(
+                        .$appropriation_data_score + .$appropriations_trend,
+                        na.rm = T
+                    )
                 ) %>%
                 slice(1) %>%
                 select(2:ncol(.)) %>% t()
@@ -528,18 +543,24 @@ server <- function(input, output, session) {
                 left_join(private_scores, by = 'id') %>%
                 group_by(id) %>%
                 summarise(
-                    mean_enrollment_score = mean(.$enrollment_data_score + .$enrollment_trend, na.rm = T),
-                    mean_retention_score = mean(.$retention_data_score + .$retention_trend, na.rm = T),
+                    mean_enrollment_score = mean(
+                        .$enrollment_data_score + .$enrollment_trend,
+                        na.rm = T
+                    ),
+                    mean_retention_score = mean(
+                        .$retention_data_score + .$retention_trend,
+                        na.rm = T
+                    ),
                     mean_price_score = mean(.$price_data_score + .$price_trend, na.rm = T),
                     mean_ratio_score = mean(.$ratio_data_score + .$ratio_trend, na.rm = T),
                 ) %>%
                 slice(1) %>%
-                select(2:ncol(.)) %>% 
+                select(2:ncol(.)) %>%
                 t()
         }
     })
     
-    summed_score_table <- # this works 
+    summed_score_table <- # this works
         eventReactive(score_averages(), {
             if (ctrl() == 1) {
                 score_table() %>% transmute(
@@ -561,16 +582,18 @@ server <- function(input, output, session) {
             
         })
     
-    output$spy <- 
-        NULL
-    
-    # 2. create data.frame 
+    # 2. create data.frame
     
     lollipop_data <-
         eventReactive(score_averages(), {
             if (ctrl() == 1) {
                 tibble(
-                    "category" = c("Enrollment", 'Retention', 'Price', 'Appropriations'),
+                    "category" = c(
+                        "Enrollment",
+                        'Retention',
+                        'Price',
+                        'Appropriations'
+                    ),
                     'score_means' = score_averages(),
                     'school_scores' = summed_score_table() %>% t()
                 )
@@ -585,28 +608,53 @@ server <- function(input, output, session) {
                     ),
                     'score_means' = score_averages(),
                     'school_scores' = summed_score_table() %>% t()
-                    )
+                )
             }
         })
-                
+    
     output$lollipop <-
         renderPlot({
             # a la https://www.data-to-viz.com/graph/lollipop.html
             ggplot(data = lollipop_data()) +
-                geom_segment(
+                geom_segment(aes(
+                    x = category,
+                    xend = category,
+                    y = school_scores,
+                    yend = score_means
+                )) +
+                geom_point(
+                    data = lollipop_data(),
                     aes(
+                        y = score_means,
                         x = category,
-                        xend = category,
-                        y = school_scores,
-                        yend = score_means
-                    )
+                        color = 'Average school of this size'
+                    ),
+                    color = '#bd0000',
+                    alpha = .8,
+                    size = 3
                 ) +
-                geom_point(data = lollipop_data(), aes(y = score_means, x = category, color = 'Average school of this size'), color = '#d17171', alpha = .8, size = 3) +
-                geom_point(data = lollipop_data(), aes(y = school_scores, x = category, color = 'Your school'), color = '#69b3a2', alpha = .8, size = 3) + 
+                geom_point(
+                    data = lollipop_data(),
+                    aes(
+                        y = school_scores,
+                        x = category,
+                        color = 'Your school'
+                    ),
+                    color = '#69b3a2',
+                    alpha = .8,
+                    size = 3
+                ) +
                 theme_bw() +
-                coord_flip() + 
-                labs(title = 'Under construction', 
-                     subtitle = "How does your school compare to others on each metric?")
+                coord_flip() +
+                labs(title = 'How does your school compare to others on each metric?',
+                     subtitle = "Note: private schools are compared to privates, and public schools to publics") +
+                ylab("Scores") +
+                xlab("Metric") +
+                theme(
+                    axis.title = element_text(size = rel(1.2)),
+                    axis.text.x = element_text(face = 'bold'), 
+                    axis.text = element_text(face = 'bold', size = rel(1.25))
+                )
         })
     
     # enrollment metrics -----------------------------------------------------
@@ -621,8 +669,7 @@ server <- function(input, output, session) {
                           lwd = 1) +
                 geom_smooth(method = 'lm',
                             se = F,
-                            lty = 2
-                ) +
+                            lty = 2) +
                 theme_bw() +
                 geom_hline(yintercept = critical_values[ctrl(), 'enrollment_warning'], col = 'orange') +
                 geom_hline(yintercept = critical_values[ctrl(), 'enrollment_alert'], col = 'red') +
